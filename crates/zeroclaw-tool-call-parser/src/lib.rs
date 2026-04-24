@@ -1387,14 +1387,14 @@ pub fn parse_tool_calls(response: &str) -> (String, Vec<ParsedToolCall>) {
 /// Qwen and other reasoning models embed chain-of-thought inline in the
 /// response text using `<think>` tags.  These must be removed before parsing
 /// tool-call tags or displaying output.
-pub fn strip_think_tags(s: &str) -> String {
+fn strip_tags_pair(s: &str, open_tag: &str, close_tag: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut rest = s;
     loop {
-        if let Some(start) = rest.find("<think>") {
+        if let Some(start) = rest.find(open_tag) {
             result.push_str(&rest[..start]);
-            if let Some(end) = rest[start..].find("</think>") {
-                rest = &rest[start + end + "</think>".len()..];
+            if let Some(end) = rest[start..].find(close_tag) {
+                rest = &rest[start + end + close_tag.len()..];
             } else {
                 // Unclosed tag: drop the rest to avoid leaking partial reasoning.
                 break;
@@ -1404,7 +1404,13 @@ pub fn strip_think_tags(s: &str) -> String {
             break;
         }
     }
-    result.trim().to_string()
+    result
+}
+
+pub fn strip_think_tags(s: &str) -> String {
+    let step1 = strip_tags_pair(s, "<think>", "</think>");
+    let step2 = strip_tags_pair(&step1, "<|channel>thought", "<channel|>");
+    step2.trim().to_string()
 }
 
 /// Strip prompt-guided tool artifacts from visible output while preserving

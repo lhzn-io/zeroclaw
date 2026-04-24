@@ -2077,6 +2077,7 @@ pub async fn run(
 ) -> Result<String> {
     // ── Wire up agnostic subsystems ──────────────────────────────
     let base_observer = observability::create_observer(&config.observability);
+    tracing::info!("DEBUG - loop start fallback: {:?}", config.providers.fallback);
     let observer: Arc<dyn Observer> = Arc::from(base_observer);
     let runtime: Arc<dyn platform::RuntimeAdapter> =
         Arc::from(platform::create_runtime(&config.runtime)?);

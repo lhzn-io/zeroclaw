@@ -77,3 +77,8 @@ apps/tauri/tauri.conf.json
 apps/tauri/build.rs
 !apps/tauri/Cargo.toml
 scripts/
+
+# Allow precompiled binaries for Jetson rapid deployment
+!target/release/zeroclaw
+!target/release-fast/zeroclaw
+!web/dist

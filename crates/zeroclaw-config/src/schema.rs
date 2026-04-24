@@ -9889,10 +9889,13 @@ impl Config {
             self.providers.fallback = Some(profile_name.to_string());
             return;
         }
-
-        if let Some(base_url) = base_url {
+        
+        // FIX: Issue #5815
+        /*
+        if false && let Some(base_url) = base_url { 
             self.providers.fallback = Some(format!("custom:{base_url}"));
         }
+        */
     }
 
     /// Validate configuration values that would cause runtime failures.
