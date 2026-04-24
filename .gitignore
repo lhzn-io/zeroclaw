@@ -64,3 +64,4 @@ rust_out
 
 # Auto-generated Tauri schemas
 apps/tauri/gen/schemas/
+/cargo_build.log
