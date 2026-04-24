@@ -358,24 +358,15 @@ pub fn all_tools_with_runtime(
         Arc::new(MemoryExportTool::new(memory.clone())),
         Arc::new(MemoryPurgeTool::new(memory.clone(), security.clone())),
         Arc::new(ScheduleTool::new(security.clone(), root_config.clone())),
-        Arc::new(ModelRoutingConfigTool::new(
-            config.clone(),
-            security.clone(),
-        )),
-        Arc::new(ModelSwitchTool::new(security.clone())),
-        Arc::new(ProxyConfigTool::new(config.clone(), security.clone())),
         Arc::new(GitOperationsTool::new(
             security.clone(),
             workspace_dir.to_path_buf(),
         )),
-        Arc::new(PushoverTool::new(
-            security.clone(),
-            workspace_dir.to_path_buf(),
-        )),
-        Arc::new(CalculatorTool::new()),
-        Arc::new(WeatherTool::new()),
-        Arc::new(CanvasTool::new(canvas_store.unwrap_or_default())),
+        // UPLIFT TRIM: removed from always-registered set to reduce LLM tool
+        // schema size: ModelRoutingConfig, ModelSwitch, ProxyConfig, Pushover,
+        // Calculator, Weather, Canvas.
     ];
+    let _ = canvas_store; // no longer consumed after CanvasTool removal
 
     // Register discord_search if discord_history channel is configured
     if root_config.channels.discord_history.is_some() {
@@ -389,36 +380,7 @@ pub fn all_tools_with_runtime(
         }
     }
 
-    // LLM task tool — always registered when a provider is configured
-    {
-        let llm_task_provider = root_config
-            .providers
-            .fallback
-            .clone()
-            .unwrap_or_else(|| "openrouter".to_string());
-        let llm_task_model = root_config
-            .providers
-            .fallback_provider()
-            .and_then(|e| e.model.clone())
-            .unwrap_or_else(|| "openai/gpt-4o-mini".to_string());
-        let llm_task_runtime_options =
-            zeroclaw_providers::provider_runtime_options_from_config(root_config);
-        tool_arcs.push(Arc::new(LlmTaskTool::new(
-            security.clone(),
-            llm_task_provider,
-            llm_task_model,
-            root_config
-                .providers
-                .fallback_provider()
-                .and_then(|e| e.temperature)
-                .unwrap_or(0.7),
-            root_config
-                .providers
-                .fallback_provider()
-                .and_then(|e| e.api_key.clone()),
-            llm_task_runtime_options,
-        )));
-    }
+    // UPLIFT TRIM: LlmTaskTool removed — redundant for our single-provider stack.
 
     if matches!(
         root_config.skills.prompt_injection_mode,
@@ -666,21 +628,7 @@ pub fn all_tools_with_runtime(
     #[cfg(feature = "rag-pdf")]
     tool_arcs.push(Arc::new(PdfReadTool::new(security.clone())));
 
-    // Vision tools are always available
-    tool_arcs.push(Arc::new(ScreenshotTool::new(security.clone())));
-    tool_arcs.push(Arc::new(ImageInfoTool::new(security.clone())));
-
-    // Session-to-session messaging tools (always available when sessions dir exists)
-    if let Ok(session_store) = zeroclaw_infra::session_store::SessionStore::new(workspace_dir) {
-        let backend: Arc<dyn zeroclaw_infra::session_backend::SessionBackend> =
-            Arc::new(session_store);
-        tool_arcs.push(Arc::new(SessionsListTool::new(backend.clone())));
-        tool_arcs.push(Arc::new(SessionsHistoryTool::new(
-            backend.clone(),
-            security.clone(),
-        )));
-        tool_arcs.push(Arc::new(SessionsSendTool::new(backend, security.clone())));
-    }
+    // UPLIFT TRIM: removed Screenshot, ImageInfo, and Sessions* (list/history/send) tools.
 
     // LinkedIn integration (config-gated)
     if root_config.linkedin.enabled {
@@ -703,12 +651,9 @@ pub fn all_tools_with_runtime(
         )));
     }
 
-    // Poll tool — always registered; uses late-bound channel map handle
+    // UPLIFT TRIM: PollTool registration removed; channel_map_handle kept for
+    // downstream wiring by start_channels.
     let channel_map_handle: ChannelMapHandle = Arc::new(RwLock::new(HashMap::new()));
-    tool_arcs.push(Arc::new(PollTool::new(
-        security.clone(),
-        Arc::clone(&channel_map_handle),
-    )));
 
     // SOP tools (registered when sops_dir is configured)
     if root_config.sop.sops_dir.is_some() {
@@ -732,20 +677,20 @@ pub fn all_tools_with_runtime(
         )));
     }
 
-    // Emoji reaction tool — always registered; channel map populated later by start_channels.
+    // UPLIFT TRIM: Reaction/AskUser/Escalate tools removed from LLM schema.
+    // Tools are instantiated only to extract the channel-map handles that
+    // start_channels wires up; the instances themselves are dropped at scope end.
     let reaction_tool = ReactionTool::new(security.clone());
     let reaction_handle = reaction_tool.channel_map_handle();
-    tool_arcs.push(Arc::new(reaction_tool));
+    drop(reaction_tool);
 
-    // Interactive ask_user tool — always registered; channel map populated later by start_channels.
     let ask_user_tool = AskUserTool::new(security.clone());
     let ask_user_handle = ask_user_tool.channel_map_handle();
-    tool_arcs.push(Arc::new(ask_user_tool));
+    drop(ask_user_tool);
 
-    // Human escalation tool — always registered; channel map populated later by start_channels.
     let escalate_tool = EscalateToHumanTool::new(security.clone(), workspace_dir.to_path_buf());
     let escalate_handle = escalate_tool.channel_map_handle();
-    tool_arcs.push(Arc::new(escalate_tool));
+    drop(escalate_tool);
 
     // Microsoft 365 Graph API integration
     if root_config.microsoft365.enabled {
