@@ -461,6 +461,7 @@ pub async fn run_gateway(
 
     let (
         mut tools_registry_raw,
+        _deferred_native_arcs_gw,
         delegate_handle_gw,
         _reaction_handle_gw,
         _channel_map_handle,
@@ -507,10 +508,10 @@ pub async fn run_gateway(
                     );
                     let activated =
                         std::sync::Arc::new(std::sync::Mutex::new(tools::ActivatedToolSet::new()));
-                    tools_registry_raw.push(Box::new(tools::ToolSearchTool::new(
-                        deferred_set,
-                        activated,
-                    )));
+                    tools_registry_raw.push(Box::new(
+                        tools::ToolSearchTool::new(activated)
+                            .with_mcp_deferred(deferred_set),
+                    ));
                 } else {
                     let names = registry.tool_names();
                     let mut registered = 0usize;

@@ -228,28 +228,56 @@ impl Default for ActivatedToolSet {
 // ── System prompt helper ─────────────────────────────────────────────────
 
 /// Build the `<available-deferred-tools>` section for the system prompt.
-/// Lists only tool names so the LLM knows what is available without
-/// consuming context window on full schemas. Includes an instruction
-/// block that tells the LLM to call `tool_search` to activate them.
-pub fn build_deferred_tools_section(deferred: &DeferredMcpToolSet) -> String {
-    if deferred.is_empty() {
+/// Lists names + short descriptions for both MCP and native deferred
+/// stubs so the LLM can self-discover its actual tool inventory without
+/// us paying full-schema tokens on every turn. The instruction block
+/// tells the LLM to treat the list as authoritative and call
+/// `tool_search` proactively when a request plausibly matches.
+///
+/// Pass `None` for `native` when native lazy-loading is disabled
+/// (`[agent] lazy_load_native_tools = false`); the section will only
+/// show MCP stubs in that case.
+pub fn build_deferred_tools_section(
+    mcp: Option<&DeferredMcpToolSet>,
+    native: Option<&crate::native_deferred::DeferredNativeToolSet>,
+) -> String {
+    let mcp_count = mcp.map(|m| m.len()).unwrap_or(0);
+    let native_count = native.map(|n| n.len()).unwrap_or(0);
+    if mcp_count == 0 && native_count == 0 {
         return String::new();
     }
     let mut out = String::new();
     out.push_str("## Deferred Tools\n\n");
     out.push_str(
-        "The tools listed below are available but NOT yet loaded. \
-         To use any of them you MUST first call the `tool_search` tool \
-         to fetch their full schemas. Use `\"select:name1,name2\"` for \
-         exact tools or keywords to search. Once activated, the tools \
-         become callable for the rest of the conversation.\n\n",
+        "The tools listed below exist and are reachable but their full \
+         schemas are NOT in your current context yet. Treat this list as \
+         your true tool inventory — if a user asks whether you have a \
+         capability that plausibly matches one of these names, the answer \
+         is YES and you should act on it.\n\n\
+         **When a user request plausibly matches one of these tools, call \
+         `tool_search` PROACTIVELY to activate it — do not ask the user \
+         for permission first.** Pass `\"select:name1,name2\"` to activate \
+         exact tools, or pass keywords to search by description. Once \
+         activated, tools stay callable for the rest of the conversation.\n\n\
+         Only claim you lack a capability after you've scanned this list \
+         and none of the entries plausibly fit.\n\n",
     );
     out.push_str("<available-deferred-tools>\n");
-    for stub in &deferred.stubs {
-        out.push_str(&stub.prefixed_name);
-        out.push_str(" - ");
-        out.push_str(&stub.description);
-        out.push('\n');
+    if let Some(m) = mcp {
+        for stub in &m.stubs {
+            out.push_str(&stub.prefixed_name);
+            out.push_str(" - ");
+            out.push_str(&stub.description);
+            out.push('\n');
+        }
+    }
+    if let Some(n) = native {
+        for stub in &n.stubs {
+            out.push_str(&stub.name);
+            out.push_str(" - ");
+            out.push_str(&stub.description);
+            out.push('\n');
+        }
     }
     out.push_str("</available-deferred-tools>\n");
     out
@@ -399,7 +427,7 @@ mod tests {
                     .unwrap(),
             ),
         };
-        assert!(build_deferred_tools_section(&set).is_empty());
+        assert!(build_deferred_tools_section(Some(&set), None).is_empty());
     }
 
     #[test]
@@ -417,7 +445,7 @@ mod tests {
                     .unwrap(),
             ),
         };
-        let section = build_deferred_tools_section(&set);
+        let section = build_deferred_tools_section(Some(&set), None);
         assert!(section.contains("<available-deferred-tools>"));
         assert!(section.contains("fs__read_file - Read a file"));
         assert!(section.contains("git__status - Git status"));
@@ -436,7 +464,7 @@ mod tests {
                     .unwrap(),
             ),
         };
-        let section = build_deferred_tools_section(&set);
+        let section = build_deferred_tools_section(Some(&set), None);
         assert!(
             section.contains("tool_search"),
             "deferred section must instruct the LLM to use tool_search"
@@ -463,7 +491,7 @@ mod tests {
                     .unwrap(),
             ),
         };
-        let section = build_deferred_tools_section(&set);
+        let section = build_deferred_tools_section(Some(&set), None);
         assert!(section.contains("server_a__list"));
         assert!(section.contains("server_a__create"));
         assert!(section.contains("server_b__query"));

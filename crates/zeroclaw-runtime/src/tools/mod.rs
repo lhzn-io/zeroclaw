@@ -74,6 +74,7 @@ pub use zeroclaw_tools::jira_tool::JiraTool;
 pub use zeroclaw_tools::knowledge_tool::KnowledgeTool;
 pub use zeroclaw_tools::linkedin::LinkedInTool;
 pub use zeroclaw_tools::llm_task::LlmTaskTool;
+pub use zeroclaw_tools::native_deferred::{DeferredNativeToolSet, DeferredNativeToolStub};
 pub use zeroclaw_tools::mcp_client::McpRegistry;
 pub use zeroclaw_tools::mcp_deferred::{
     ActivatedToolSet, DeferredMcpToolSet, build_deferred_tools_section,
@@ -283,7 +284,15 @@ pub fn all_tools(
     Option<ChannelMapHandle>,
     Option<ChannelMapHandle>,
 ) {
-    all_tools_with_runtime(
+    let (
+        eager,
+        _deferred_native,
+        delegate_handle,
+        reaction_handle,
+        channel_map,
+        ask_user_handle,
+        escalate_handle,
+    ) = all_tools_with_runtime(
         config,
         security,
         Arc::new(NativeRuntime::new()),
@@ -298,6 +307,14 @@ pub fn all_tools(
         fallback_api_key,
         root_config,
         canvas_store,
+    );
+    (
+        eager,
+        delegate_handle,
+        reaction_handle,
+        channel_map,
+        ask_user_handle,
+        escalate_handle,
     )
 }
 
@@ -324,6 +341,7 @@ pub fn all_tools_with_runtime(
     canvas_store: Option<CanvasStore>,
 ) -> (
     Vec<Box<dyn Tool>>,
+    Vec<Arc<dyn Tool>>,
     Option<DelegateParentToolsHandle>,
     Option<ChannelMapHandle>,
     ChannelMapHandle,
@@ -362,9 +380,9 @@ pub fn all_tools_with_runtime(
             security.clone(),
             workspace_dir.to_path_buf(),
         )),
-        // UPLIFT TRIM: removed from always-registered set to reduce LLM tool
-        // schema size: ModelRoutingConfig, ModelSwitch, ProxyConfig, Pushover,
-        // Calculator, Weather, Canvas.
+        // Removed from always-registered set to reduce LLM tool schema size:
+        // ModelRoutingConfig, ModelSwitch, ProxyConfig, Pushover, Calculator,
+        // Weather, Canvas.
     ];
     let _ = canvas_store; // no longer consumed after CanvasTool removal
 
@@ -380,7 +398,7 @@ pub fn all_tools_with_runtime(
         }
     }
 
-    // UPLIFT TRIM: LlmTaskTool removed — redundant for our single-provider stack.
+    // LlmTaskTool removed — redundant for single-provider stacks.
 
     if matches!(
         root_config.skills.prompt_injection_mode,
@@ -628,7 +646,7 @@ pub fn all_tools_with_runtime(
     #[cfg(feature = "rag-pdf")]
     tool_arcs.push(Arc::new(PdfReadTool::new(security.clone())));
 
-    // UPLIFT TRIM: removed Screenshot, ImageInfo, and Sessions* (list/history/send) tools.
+    // Removed Screenshot, ImageInfo, and Sessions* (list/history/send) tools.
 
     // LinkedIn integration (config-gated)
     if root_config.linkedin.enabled {
@@ -651,7 +669,7 @@ pub fn all_tools_with_runtime(
         )));
     }
 
-    // UPLIFT TRIM: PollTool registration removed; channel_map_handle kept for
+    // PollTool registration removed; channel_map_handle kept for
     // downstream wiring by start_channels.
     let channel_map_handle: ChannelMapHandle = Arc::new(RwLock::new(HashMap::new()));
 
@@ -677,7 +695,7 @@ pub fn all_tools_with_runtime(
         )));
     }
 
-    // UPLIFT TRIM: Reaction/AskUser/Escalate tools removed from LLM schema.
+    // Reaction/AskUser/Escalate tools removed from LLM schema.
     // Tools are instantiated only to extract the channel-map handles that
     // start_channels wires up; the instances themselves are dropped at scope end.
     let reaction_tool = ReactionTool::new(security.clone());
@@ -718,8 +736,12 @@ pub fn all_tools_with_runtime(
                 tracing::error!(
                     "microsoft365: client_credentials auth_flow requires a non-empty client_secret"
                 );
+                // Early-return path for an unrecoverable microsoft365
+                // misconfig — bypass the lazy-load partition; everything
+                // ships eager.
                 return (
                     boxed_registry_from_arcs(tool_arcs),
+                    Vec::new(),
                     None,
                     Some(reaction_handle),
                     channel_map_handle,
@@ -897,13 +919,67 @@ pub fn all_tools_with_runtime(
         )));
     }
 
+    // Partition the tool set into eager (full schemas in every
+    // chat/completions request) and deferred (stubs only, full
+    // schemas activated on-demand via tool_search). The keep-eager
+    // list covers the tools the agent reaches for nearly every turn
+    // — file/shell/memory/cron/git — where deferring would cost an
+    // extra LLM round-trip for activation. Everything else (web
+    // tools, integrations, generators) is registered as a deferred
+    // stub when `[agent] lazy_load_native_tools = true`.
+    let (eager_arcs, deferred_native_arcs): (Vec<Arc<dyn Tool>>, Vec<Arc<dyn Tool>>) =
+        if root_config.agent.lazy_load_native_tools {
+            tool_arcs.into_iter().partition(|t| is_eager_native_tool(t.name()))
+        } else {
+            (tool_arcs, Vec::new())
+        };
+
     (
-        boxed_registry_from_arcs(tool_arcs),
+        boxed_registry_from_arcs(eager_arcs),
+        deferred_native_arcs,
         delegate_handle,
         Some(reaction_handle),
         channel_map_handle,
         Some(ask_user_handle),
         Some(escalate_handle),
+    )
+}
+
+/// Returns `true` for tools that should always have their full schema
+/// in the LLM's tool list. These are the tools the agent uses most
+/// often where the cost of a `tool_search` round-trip outweighs the
+/// schema-token savings. Everything else becomes a deferred stub when
+/// `[agent] lazy_load_native_tools = true`.
+fn is_eager_native_tool(name: &str) -> bool {
+    matches!(
+        name,
+        // File and shell — touched on virtually every turn.
+        "shell"
+            | "file_read"
+            | "file_write"
+            | "file_edit"
+            | "glob_search"
+            | "content_search"
+            // Cron — scheduling is a daemon-mode core capability.
+            | "cron_add"
+            | "cron_list"
+            | "cron_remove"
+            | "cron_update"
+            | "cron_run"
+            | "cron_runs"
+            // Memory — implicit recall on most turns.
+            | "memory_store"
+            | "memory_recall"
+            | "memory_forget"
+            | "memory_export"
+            | "memory_purge"
+            // Schedule — paired with cron.
+            | "schedule"
+            // Git — heavy use in dev workflows.
+            | "git_operations"
+            // Skill discovery — must stay eager when compact-mode skills
+            // are configured so the agent can read individual skills.
+            | "read_skill"
     )
 }
 

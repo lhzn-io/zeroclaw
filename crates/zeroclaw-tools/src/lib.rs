@@ -49,6 +49,7 @@ pub mod memory_purge;
 pub mod memory_recall;
 pub mod memory_store;
 pub mod model_routing_config;
+pub mod native_deferred;
 pub mod node_capabilities;
 pub mod notion_tool;
 pub mod opencode_cli;

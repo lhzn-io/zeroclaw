@@ -404,6 +404,7 @@ impl Agent {
 
         let (
             mut tools,
+            _deferred_native_arcs,
             delegate_handle,
             _reaction_handle,
             _channel_map_handle,
@@ -452,10 +453,10 @@ impl Agent {
                         let activated =
                             Arc::new(std::sync::Mutex::new(tools::ActivatedToolSet::new()));
                         activated_tools = Some(Arc::clone(&activated));
-                        tools.push(Box::new(tools::ToolSearchTool::new(
-                            deferred_set,
-                            activated,
-                        )));
+                        tools.push(Box::new(
+                            tools::ToolSearchTool::new(activated)
+                                .with_mcp_deferred(deferred_set),
+                        ));
                     } else {
                         let names = registry.tool_names();
                         let mut registered = 0usize;

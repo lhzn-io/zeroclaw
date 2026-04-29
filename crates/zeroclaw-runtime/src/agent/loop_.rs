@@ -2117,6 +2117,7 @@ pub async fn run(
     };
     let (
         mut tools_registry,
+        deferred_native_arcs,
         delegate_handle,
         _reaction_handle,
         _channel_map_handle,
@@ -2176,6 +2177,9 @@ pub async fn run(
     let mut activated_handle: Option<
         std::sync::Arc<std::sync::Mutex<crate::tools::ActivatedToolSet>>,
     > = None;
+
+    // ── MCP path ──
+    let mut mcp_deferred_set: Option<crate::tools::DeferredMcpToolSet> = None;
     if config.mcp.enabled && !config.mcp.servers.is_empty() {
         tracing::info!(
             "Initializing MCP client — {} server(s) configured",
@@ -2185,7 +2189,6 @@ pub async fn run(
             Ok(registry) => {
                 let registry = std::sync::Arc::new(registry);
                 if config.mcp.deferred_loading {
-                    // Deferred path: build stubs and register tool_search
                     let deferred_set = crate::tools::DeferredMcpToolSet::from_registry(
                         std::sync::Arc::clone(&registry),
                     )
@@ -2195,17 +2198,9 @@ pub async fn run(
                         deferred_set.len(),
                         registry.server_count()
                     );
-                    deferred_section = crate::tools::build_deferred_tools_section(&deferred_set);
-                    let activated = std::sync::Arc::new(std::sync::Mutex::new(
-                        crate::tools::ActivatedToolSet::new(),
-                    ));
-                    activated_handle = Some(std::sync::Arc::clone(&activated));
-                    tools_registry.push(Box::new(crate::tools::ToolSearchTool::new(
-                        deferred_set,
-                        activated,
-                    )));
+                    mcp_deferred_set = Some(deferred_set);
                 } else {
-                    // Eager path: register all MCP tools directly
+                    // Eager path: register all MCP tools directly.
                     let names = registry.tool_names();
                     let mut registered = 0usize;
                     for name in names {
@@ -2234,6 +2229,39 @@ pub async fn run(
                 tracing::error!("MCP registry failed to initialize: {e:#}");
             }
         }
+    }
+
+    // ── Native lazy-load ──
+    // `all_tools_with_runtime` partitioned the tool set into eager
+    // (already in `tools_registry`) and deferred (the Arcs we got back
+    // here). When non-empty, wrap them in a `DeferredNativeToolSet`
+    // that flows through the same `tool_search` path as MCP stubs.
+    let native_deferred_set = if !deferred_native_arcs.is_empty() {
+        let n = crate::tools::DeferredNativeToolSet::from_tools(deferred_native_arcs);
+        tracing::info!("Native deferred: {} tool stub(s)", n.len());
+        Some(n)
+    } else {
+        None
+    };
+
+    // ── Wire `tool_search` when either deferred set is non-empty ──
+    if mcp_deferred_set.is_some() || native_deferred_set.is_some() {
+        deferred_section = crate::tools::build_deferred_tools_section(
+            mcp_deferred_set.as_ref(),
+            native_deferred_set.as_ref(),
+        );
+        let activated = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::tools::ActivatedToolSet::new(),
+        ));
+        activated_handle = Some(std::sync::Arc::clone(&activated));
+        let mut tool_search = crate::tools::ToolSearchTool::new(activated);
+        if let Some(m) = mcp_deferred_set {
+            tool_search = tool_search.with_mcp_deferred(m);
+        }
+        if let Some(n) = native_deferred_set {
+            tool_search = tool_search.with_native_deferred(n);
+        }
+        tools_registry.push(Box::new(tool_search));
     }
 
     // ── Resolve provider ─────────────────────────────────────────
@@ -3112,6 +3140,7 @@ pub async fn process_message(
     };
     let (
         mut tools_registry,
+        deferred_native_arcs_pm,
         delegate_handle_pm,
         _reaction_handle_pm,
         _channel_map_handle_pm,
@@ -3148,6 +3177,8 @@ pub async fn process_message(
     let mut activated_handle_pm: Option<
         std::sync::Arc<std::sync::Mutex<crate::tools::ActivatedToolSet>>,
     > = None;
+
+    let mut mcp_deferred_set_pm: Option<crate::tools::DeferredMcpToolSet> = None;
     if config.mcp.enabled && !config.mcp.servers.is_empty() {
         tracing::info!(
             "Initializing MCP client — {} server(s) configured",
@@ -3166,15 +3197,7 @@ pub async fn process_message(
                         deferred_set.len(),
                         registry.server_count()
                     );
-                    deferred_section = crate::tools::build_deferred_tools_section(&deferred_set);
-                    let activated = std::sync::Arc::new(std::sync::Mutex::new(
-                        crate::tools::ActivatedToolSet::new(),
-                    ));
-                    activated_handle_pm = Some(std::sync::Arc::clone(&activated));
-                    tools_registry.push(Box::new(crate::tools::ToolSearchTool::new(
-                        deferred_set,
-                        activated,
-                    )));
+                    mcp_deferred_set_pm = Some(deferred_set);
                 } else {
                     let names = registry.tool_names();
                     let mut registered = 0usize;
@@ -3204,6 +3227,34 @@ pub async fn process_message(
                 tracing::error!("MCP registry failed to initialize: {e:#}");
             }
         }
+    }
+
+    // Native lazy-load — same pattern as the daemon path above.
+    let native_deferred_set_pm = if !deferred_native_arcs_pm.is_empty() {
+        let n = crate::tools::DeferredNativeToolSet::from_tools(deferred_native_arcs_pm);
+        tracing::info!("Native deferred: {} tool stub(s)", n.len());
+        Some(n)
+    } else {
+        None
+    };
+
+    if mcp_deferred_set_pm.is_some() || native_deferred_set_pm.is_some() {
+        deferred_section = crate::tools::build_deferred_tools_section(
+            mcp_deferred_set_pm.as_ref(),
+            native_deferred_set_pm.as_ref(),
+        );
+        let activated = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::tools::ActivatedToolSet::new(),
+        ));
+        activated_handle_pm = Some(std::sync::Arc::clone(&activated));
+        let mut tool_search = crate::tools::ToolSearchTool::new(activated);
+        if let Some(m) = mcp_deferred_set_pm {
+            tool_search = tool_search.with_mcp_deferred(m);
+        }
+        if let Some(n) = native_deferred_set_pm {
+            tool_search = tool_search.with_native_deferred(n);
+        }
+        tools_registry.push(Box::new(tool_search));
     }
 
     let provider_name = config.providers.fallback.as_deref().unwrap_or("openrouter");

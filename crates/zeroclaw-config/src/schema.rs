@@ -1413,6 +1413,14 @@ pub struct AgentConfig {
     /// When true: bootstrap_max_chars=6000, rag_chunk_limit=2. Use for 13B or smaller models.
     #[serde(default)]
     pub compact_context: bool,
+    /// When true, register secondary native tools (web/integrations/generators)
+    /// as deferred stubs in the system prompt and only emit their full
+    /// schemas to the LLM after a `tool_search` activation. The
+    /// keep-eager set (file/shell/memory/cron/git/schedule) always
+    /// ships full schemas. Mirrors the MCP `deferred_loading` flag at
+    /// the native-tool layer. Default: `true`.
+    #[serde(default = "default_lazy_load_native_tools")]
+    pub lazy_load_native_tools: bool,
     /// Maximum tool-call loop turns per user message. Default: `10`.
     /// Setting to `0` falls back to the safe default of `10`.
     #[serde(default = "default_agent_max_tool_iterations")]
@@ -1515,6 +1523,10 @@ fn default_agent_tool_dispatcher() -> String {
     "auto".into()
 }
 
+fn default_lazy_load_native_tools() -> bool {
+    true
+}
+
 fn default_max_system_prompt_chars() -> usize {
     0
 }
@@ -1523,6 +1535,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             compact_context: true,
+            lazy_load_native_tools: default_lazy_load_native_tools(),
             max_tool_iterations: default_agent_max_tool_iterations(),
             max_history_messages: default_agent_max_history_messages(),
             max_context_tokens: default_agent_max_context_tokens(),

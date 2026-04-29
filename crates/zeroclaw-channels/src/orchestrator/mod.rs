@@ -5114,6 +5114,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
     let workspace = config.workspace_dir.clone();
     let (
         mut built_tools,
+        deferred_native_arcs_ch,
         delegate_handle_ch,
         reaction_handle_ch,
         _channel_map_handle,
@@ -5146,6 +5147,8 @@ pub async fn start_channels(config: Config) -> Result<()> {
     let mut ch_activated_handle: Option<
         std::sync::Arc<std::sync::Mutex<zeroclaw_runtime::tools::ActivatedToolSet>>,
     > = None;
+
+    let mut mcp_deferred_set_ch: Option<zeroclaw_runtime::tools::DeferredMcpToolSet> = None;
     if config.mcp.enabled && !config.mcp.servers.is_empty() {
         tracing::info!(
             "Initializing MCP client — {} server(s) configured",
@@ -5164,16 +5167,7 @@ pub async fn start_channels(config: Config) -> Result<()> {
                         deferred_set.len(),
                         registry.server_count()
                     );
-                    deferred_section =
-                        zeroclaw_runtime::tools::build_deferred_tools_section(&deferred_set);
-                    let activated = std::sync::Arc::new(std::sync::Mutex::new(
-                        zeroclaw_runtime::tools::ActivatedToolSet::new(),
-                    ));
-                    ch_activated_handle = Some(std::sync::Arc::clone(&activated));
-                    built_tools.push(Box::new(zeroclaw_runtime::tools::ToolSearchTool::new(
-                        deferred_set,
-                        activated,
-                    )));
+                    mcp_deferred_set_ch = Some(deferred_set);
                 } else {
                     let names = registry.tool_names();
                     let mut registered = 0usize;
@@ -5205,6 +5199,34 @@ pub async fn start_channels(config: Config) -> Result<()> {
                 tracing::error!("MCP registry failed to initialize: {e:#}");
             }
         }
+    }
+
+    // Native lazy-load — channel-orchestrator path.
+    let native_deferred_set_ch = if !deferred_native_arcs_ch.is_empty() {
+        let n = zeroclaw_runtime::tools::DeferredNativeToolSet::from_tools(deferred_native_arcs_ch);
+        tracing::info!("Native deferred: {} tool stub(s)", n.len());
+        Some(n)
+    } else {
+        None
+    };
+
+    if mcp_deferred_set_ch.is_some() || native_deferred_set_ch.is_some() {
+        deferred_section = zeroclaw_runtime::tools::build_deferred_tools_section(
+            mcp_deferred_set_ch.as_ref(),
+            native_deferred_set_ch.as_ref(),
+        );
+        let activated = std::sync::Arc::new(std::sync::Mutex::new(
+            zeroclaw_runtime::tools::ActivatedToolSet::new(),
+        ));
+        ch_activated_handle = Some(std::sync::Arc::clone(&activated));
+        let mut tool_search = zeroclaw_runtime::tools::ToolSearchTool::new(activated);
+        if let Some(m) = mcp_deferred_set_ch {
+            tool_search = tool_search.with_mcp_deferred(m);
+        }
+        if let Some(n) = native_deferred_set_ch {
+            tool_search = tool_search.with_native_deferred(n);
+        }
+        built_tools.push(Box::new(tool_search));
     }
 
     let skills = zeroclaw_runtime::skills::load_skills_with_config(&workspace, &config);
