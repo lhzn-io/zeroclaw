@@ -859,6 +859,98 @@ pub async fn run_tool_call_loop(
     receipt_generator: Option<&crate::agent::tool_receipts::ReceiptGenerator>,
     collected_receipts: Option<&std::sync::Mutex<Vec<String>>>,
 ) -> Result<String> {
+    let mut turn_input_tokens = None;
+    let mut turn_output_tokens = None;
+    let mut turn_tool_calls = Vec::new();
+    let turn_id = uuid::Uuid::new_v4().to_string();
+    let loop_started_at = std::time::Instant::now();
+    
+    let result = run_tool_call_loop_inner(
+        provider,
+        history,
+        tools_registry,
+        observer,
+        provider_name,
+        model,
+        temperature,
+        silent,
+        approval,
+        channel_name,
+        channel_reply_target,
+        multimodal_config,
+        max_tool_iterations,
+        cancellation_token,
+        on_delta,
+        hooks,
+        excluded_tools,
+        dedup_exempt_tools,
+        activated_tools,
+        model_switch_callback,
+        pacing,
+        max_tool_result_chars,
+        context_token_budget,
+        shared_budget,
+        channel,
+        receipt_generator,
+        collected_receipts,
+        &mut turn_input_tokens,
+        &mut turn_output_tokens,
+        &mut turn_tool_calls,
+    ).await;
+    
+    if let Some(hooks) = hooks {
+        let turn_record = crate::hooks::TurnRecord {
+            turn_id,
+            session_id: None,
+            timestamp_utc: chrono::Utc::now(),
+            provider: provider_name.to_string(),
+            model: model.to_string(),
+            input_tokens: turn_input_tokens,
+            output_tokens: turn_output_tokens,
+            latency_ms: loop_started_at.elapsed().as_millis() as u64,
+            tool_calls: turn_tool_calls,
+            success: result.is_ok(),
+            error: result.as_ref().err().map(|e| e.to_string()),
+            metadata: serde_json::Value::Null,
+        };
+        hooks.fire_turn_complete(&turn_record).await;
+    }
+    
+    result
+}
+
+pub async fn run_tool_call_loop_inner(
+    provider: &dyn Provider,
+    history: &mut Vec<ChatMessage>,
+    tools_registry: &[Box<dyn Tool>],
+    observer: &dyn Observer,
+    provider_name: &str,
+    model: &str,
+    temperature: f64,
+    silent: bool,
+    approval: Option<&ApprovalManager>,
+    channel_name: &str,
+    channel_reply_target: Option<&str>,
+    multimodal_config: &zeroclaw_config::schema::MultimodalConfig,
+    max_tool_iterations: usize,
+    cancellation_token: Option<CancellationToken>,
+    on_delta: Option<tokio::sync::mpsc::Sender<DraftEvent>>,
+    hooks: Option<&crate::hooks::HookRunner>,
+    excluded_tools: &[String],
+    dedup_exempt_tools: &[String],
+    activated_tools: Option<&std::sync::Arc<std::sync::Mutex<crate::tools::ActivatedToolSet>>>,
+    model_switch_callback: Option<ModelSwitchCallback>,
+    pacing: &zeroclaw_config::schema::PacingConfig,
+    max_tool_result_chars: usize,
+    context_token_budget: usize,
+    shared_budget: Option<Arc<std::sync::atomic::AtomicUsize>>,
+    channel: Option<&dyn Channel>,
+    receipt_generator: Option<&crate::agent::tool_receipts::ReceiptGenerator>,
+    collected_receipts: Option<&std::sync::Mutex<Vec<String>>>,
+    turn_input_tokens: &mut Option<u64>,
+    turn_output_tokens: &mut Option<u64>,
+    turn_tool_calls: &mut Vec<crate::hooks::ToolCallRecord>,
+) -> Result<String> {
     let max_iterations = if max_tool_iterations == 0 {
         DEFAULT_MAX_TOOL_ITERATIONS
     } else {
@@ -1231,6 +1323,12 @@ pub async fn run_tool_call_loop(
                     .as_ref()
                     .map(|u| (u.input_tokens, u.output_tokens))
                     .unwrap_or((None, None));
+                if let Some(i) = resp_input_tokens {
+                    *turn_input_tokens = Some((*turn_input_tokens).unwrap_or(0) + i as u64);
+                }
+                if let Some(o) = resp_output_tokens {
+                    *turn_output_tokens = Some((*turn_output_tokens).unwrap_or(0) + o as u64);
+                }
 
                 observer.record_event(&ObserverEvent::LlmResponse {
                     provider: provider_name.to_string(),
@@ -1894,6 +1992,12 @@ pub async fn run_tool_call_loop(
                     v.push(format!("{tool_name}: {receipt}"));
                 }
             }
+            turn_tool_calls.push(crate::hooks::ToolCallRecord {
+                name: tool_name.clone(),
+                duration_ms: outcome.duration.as_millis() as u64,
+                success: outcome.success,
+                error: outcome.error_reason.clone(),
+            });
             individual_results.push((tool_call_id, result_output.clone()));
             let _ = writeln!(
                 tool_results,

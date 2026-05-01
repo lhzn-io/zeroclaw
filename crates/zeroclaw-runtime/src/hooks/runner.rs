@@ -122,6 +122,15 @@ impl HookRunner {
         join_all(futs).await;
     }
 
+    pub async fn fire_turn_complete(&self, turn: &crate::hooks::traits::TurnRecord) {
+        let futs: Vec<_> = self
+            .handlers
+            .iter()
+            .map(|h| h.on_turn_complete(turn))
+            .collect();
+        join_all(futs).await;
+    }
+
     // ---------------------------------------------------------------
     // Modifying dispatchers (sequential by priority, short-circuit on Cancel)
     // ---------------------------------------------------------------

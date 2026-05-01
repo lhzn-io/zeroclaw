@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
 
 use zeroclaw_api::channel::ChannelMessage;
 use zeroclaw_api::provider::{ChatMessage, ChatResponse};
@@ -17,6 +19,30 @@ impl<T> HookResult<T> {
     pub fn is_cancel(&self) -> bool {
         matches!(self, HookResult::Cancel(_))
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolCallRecord {
+    pub name: String,
+    pub duration_ms: u64,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TurnRecord {
+    pub turn_id: String,
+    pub session_id: Option<String>,
+    pub timestamp_utc: DateTime<Utc>,
+    pub provider: String,
+    pub model: String,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub latency_ms: u64,
+    pub tool_calls: Vec<ToolCallRecord>,
+    pub success: bool,
+    pub error: Option<String>,
+    pub metadata: serde_json::Value,
 }
 
 /// Trait for hook handlers. All methods have default no-op implementations.
@@ -38,6 +64,7 @@ pub trait HookHandler: Send + Sync {
     async fn on_after_tool_call(&self, _tool: &str, _result: &ToolResult, _duration: Duration) {}
     async fn on_message_sent(&self, _channel: &str, _recipient: &str, _content: &str) {}
     async fn on_heartbeat_tick(&self) {}
+    async fn on_turn_complete(&self, _turn: &TurnRecord) {}
 
     // --- Modifying hooks (sequential by priority, can cancel) ---
     async fn before_model_resolve(

@@ -52,7 +52,8 @@ impl SqliteSessionBackend {
                 created_at   TEXT NOT NULL,
                 last_activity TEXT NOT NULL,
                 message_count INTEGER NOT NULL DEFAULT 0,
-                name         TEXT
+                name         TEXT,
+                extra_metadata TEXT
              );
 
              CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
@@ -86,6 +87,17 @@ impl SqliteSessionBackend {
             .unwrap_or(false);
         if !has_name {
             let _ = conn.execute("ALTER TABLE session_metadata ADD COLUMN name TEXT", []);
+        }
+
+        let has_extra_metadata: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('session_metadata') WHERE name = 'extra_metadata'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !has_extra_metadata {
+            let _ = conn.execute("ALTER TABLE session_metadata ADD COLUMN extra_metadata TEXT", []);
         }
 
         // Migration: add state tracking columns
