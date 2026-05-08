@@ -217,7 +217,7 @@ impl Tool for ImageInfoTool {
                 "bmp" => "image/bmp",
                 _ => "application/octet-stream",
             };
-            let _ = write!(output, "\ndata:{mime};base64,{encoded}");
+            let _ = write!(output, "\n[IMAGE:data:{mime};base64,{encoded}]");
         }
 
         Ok(ToolResult {
@@ -487,7 +487,7 @@ mod tests {
             .await
             .unwrap();
         assert!(result.success);
-        assert!(result.output.contains("data:image/png;base64,"));
+        assert!(result.output.contains("[IMAGE:data:image/png;base64,"));
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }

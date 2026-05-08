@@ -69,6 +69,7 @@ pub struct BrowserTool {
     native_webdriver_url: String,
     #[allow(dead_code)]
     native_chrome_path: Option<String>,
+    max_output_len: usize,
     computer_use: ComputerUseConfig,
     #[cfg(feature = "browser-native")]
     native_state: tokio::sync::Mutex<native_backend::NativeBrowserState>,
@@ -213,6 +214,7 @@ impl BrowserTool {
             true,
             "http://127.0.0.1:9515".into(),
             None,
+            32_000,
             ComputerUseConfig::default(),
         )
     }
@@ -226,6 +228,7 @@ impl BrowserTool {
         native_headless: bool,
         native_webdriver_url: String,
         native_chrome_path: Option<String>,
+        max_output_len: usize,
         computer_use: ComputerUseConfig,
     ) -> Self {
         Self {
@@ -236,6 +239,7 @@ impl BrowserTool {
             native_headless,
             native_webdriver_url,
             native_chrome_path,
+            max_output_len,
             computer_use,
             #[cfg(feature = "browser-native")]
             native_state: tokio::sync::Mutex::new(native_backend::NativeBrowserState::default()),
@@ -1106,7 +1110,15 @@ impl Tool for BrowserTool {
             }
         };
 
-        self.execute_action(action, backend).await
+        let mut result = self.execute_action(action, backend).await?;
+        
+        // Safeguard to prevent output bloat blowing up the orchestrator LLM context window
+        if result.output.len() > self.max_output_len {
+            result.output.truncate(self.max_output_len);
+            result.output.push_str("\n\n... [TRUNCATED - BROWSER DOM/OUTPUT TOO LARGE FOR CONTEXT MEMORY] ... To read deeper, refine your search or depth parameter instead of dumping the whole page.");
+        }
+        
+        Ok(result)
     }
 }
 
@@ -1273,8 +1285,11 @@ mod native_backend {
                             .with_context(|| format!("Failed to write screenshot to {path_str}"))?;
                         payload["path"] = Value::String(path_str);
                     } else {
-                        payload["png_base64"] =
-                            Value::String(base64::engine::general_purpose::STANDARD.encode(&png));
+                        let ws = std::env::var("ZEROCLAW_WORKSPACE").unwrap_or_else(|_| ".".to_owned());
+                        let default_path = format!("{}/screenshot_{}.png", ws, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                        let _ = tokio::fs::write(&default_path, &png).await;
+                        payload["path"] = Value::String(default_path);
+                        payload["notice"] = Value::String("Screenshot was automatically saved to path. NOTE: For multimodal analysis, you must pass this file to a vision-capable tool. Base64 strings are omitted directly to prevent LLM context exhaustion.".to_string());
                     }
 
                     Ok(payload)
@@ -1480,15 +1495,20 @@ mod native_backend {
             let mut chrome_options: Map<String, Value> = Map::new();
             let mut args: Vec<Value> = Vec::new();
 
+            capabilities.insert(
+                "browserName".to_string(),
+                Value::String("chrome".to_string()),
+            );
+
             if headless {
                 args.push(Value::String("--headless=new".to_string()));
                 args.push(Value::String("--disable-gpu".to_string()));
             }
 
-            // When running as a service (systemd/OpenRC), the browser sandbox
-            // fails because the process lacks a user namespace / session.
+            // When running as a service (systemd/OpenRC) or inside docker
+            // The browser sandbox may fail.
             // --no-sandbox and --disable-dev-shm-usage are required in this context.
-            if super::is_service_environment() {
+            if super::is_service_environment() || std::env::var("ZEROCLAW_NO_SANDBOX").is_ok() {
                 args.push(Value::String("--no-sandbox".to_string()));
                 args.push(Value::String("--disable-dev-shm-usage".to_string()));
             }
@@ -1730,7 +1750,7 @@ mod native_backend {
             .unwrap_or_else(|| "null".to_string());
 
         format!(
-            r#"(() => {{
+            r#"return (() => {{
   const interactiveOnly = {interactive_only};
   const compact = {compact};
   const maxDepth = {depth_literal};

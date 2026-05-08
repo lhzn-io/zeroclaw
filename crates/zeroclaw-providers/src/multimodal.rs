@@ -187,11 +187,8 @@ pub async fn prepare_messages_for_provider(
 
     let mut normalized_messages = Vec::with_capacity(trimmed.len());
     for message in &trimmed {
-        if message.role != "user" {
-            normalized_messages.push(message.clone());
-            continue;
-        }
-
+        // Evaluate for multimodal markers in both user AND tool/assistant roles.
+        // This enables visual processing for dynamically scraped elements injected by tools.
         let (cleaned_text, refs) = parse_image_markers(&message.content);
         if refs.is_empty() {
             normalized_messages.push(message.clone());

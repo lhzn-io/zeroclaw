@@ -442,6 +442,7 @@ pub fn all_tools_with_runtime(
             browser_config.native_headless,
             browser_config.native_webdriver_url.clone(),
             browser_config.native_chrome_path.clone(),
+            browser_config.max_output_len,
             ComputerUseConfig {
                 endpoint: browser_config.computer_use.endpoint.clone(),
                 api_key: browser_config.computer_use.api_key.clone(),
@@ -662,7 +663,8 @@ pub fn all_tools_with_runtime(
     #[cfg(feature = "rag-pdf")]
     tool_arcs.push(Arc::new(PdfReadTool::new(security.clone())));
 
-    // Removed Screenshot, ImageInfo, and Sessions* (list/history/send) tools.
+    // Restored ImageInfo Tool. Screenshot is deprecated in favor of browser screenshot fallback.
+    tool_arcs.push(Arc::new(ImageInfoTool::new(security.clone())));
 
     // LinkedIn integration (config-gated)
     if root_config.linkedin.enabled {
@@ -969,20 +971,17 @@ pub fn all_tools_with_runtime(
 fn is_eager_native_tool(name: &str) -> bool {
     matches!(
         name,
-        // File and shell — touched on virtually every turn.
-        "shell"
+        // Browser — user explicitly requested always active
+        "browser"
+            // File and shell — touched on virtually every turn.
+            | "shell"
             | "file_read"
             | "file_write"
             | "file_edit"
             | "glob_search"
             | "content_search"
-            // Cron — scheduling is a daemon-mode core capability.
-            | "cron_add"
-            | "cron_list"
-            | "cron_remove"
-            | "cron_update"
-            | "cron_run"
-            | "cron_runs"
+            // Schedule — paired with cron, though cron triggers are omitted below to save space
+            | "schedule"
             // Memory — implicit recall on most turns.
             | "memory_store"
             | "memory_recall"

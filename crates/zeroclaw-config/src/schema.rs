@@ -2728,10 +2728,17 @@ pub struct BrowserConfig {
     /// Optional Chrome/Chromium executable path for rust-native backend
     #[serde(default)]
     pub native_chrome_path: Option<String>,
+    /// Maximum string length for browser tool output text. Defaults to 32,000 to prevent LLM context exhaustion.
+    #[serde(default = "default_browser_max_output_len")]
+    pub max_output_len: usize,
     /// Computer-use sidecar configuration
     #[serde(default)]
     #[nested]
     pub computer_use: BrowserComputerUseConfig,
+}
+
+fn default_browser_max_output_len() -> usize {
+    32_000
 }
 
 fn default_browser_allowed_domains() -> Vec<String> {
@@ -2756,6 +2763,7 @@ impl Default for BrowserConfig {
             native_headless: default_true(),
             native_webdriver_url: default_browser_webdriver_url(),
             native_chrome_path: None,
+            max_output_len: default_browser_max_output_len(),
             computer_use: BrowserComputerUseConfig::default(),
         }
     }
