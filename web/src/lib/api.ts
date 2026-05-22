@@ -389,3 +389,14 @@ export function getCliTools(): Promise<CliTool[]> {
     return Array.isArray(result) ? result : [];
   });
 }
+
+// ---------------------------------------------------------------------------
+// Maintenance
+// ---------------------------------------------------------------------------
+
+export async function neuralyze(mode: 'soft' | 'hard' = 'soft'): Promise<{ status: string; message: string; clear_local_storage: boolean }> {
+  return apiFetch('/api/maintenance/neuralyze', { 
+    method: 'POST',
+    body: JSON.stringify({ mode })
+  });
+}

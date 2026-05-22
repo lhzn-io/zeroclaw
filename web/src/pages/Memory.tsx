@@ -10,7 +10,7 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import type { MemoryEntry } from '@/types/api';
-import { getMemory, storeMemory, deleteMemory } from '@/lib/api';
+import { getMemory, storeMemory, deleteMemory, neuralyze } from '@/lib/api';
 import { SESSION_ID_STORAGE_KEY } from '@/lib/ws';
 import { t } from '@/lib/i18n';
 
@@ -33,6 +33,8 @@ export default function Memory() {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [confirmWipeAll, setConfirmWipeAll] = useState(false);
+  const [wipingAll, setWipingAll] = useState(false);
 
   // Recover the agent chat session this memory was captured in. The chat
   // page reads `getOrCreateSessionId()` (backed by SESSION_ID_STORAGE_KEY)
@@ -106,6 +108,21 @@ export default function Memory() {
     }
   };
 
+  const handleWipeAll = async () => {
+    setWipingAll(true);
+    try {
+      await neuralyze('hard');
+      setEntries([]);
+      // Reload to ensure all state is consistent
+      window.location.reload();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Wipe failed');
+    } finally {
+      setWipingAll(false);
+      setConfirmWipeAll(false);
+    }
+  };
+
   if (error && entries.length === 0) {
     return (
       <div className="p-6 animate-fade-in">
@@ -126,9 +143,15 @@ export default function Memory() {
             {t('memory.memory_title')} ({entries.length})
           </h2>
         </div>
-        <button onClick={() => setShowForm(true)} className="btn-electric flex items-center gap-2 text-sm px-4 py-2">
-          <Plus className="h-4 w-4" />{t('memory.add_memory')}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setConfirmWipeAll(true)} className="btn-secondary flex items-center gap-2 text-sm px-3 py-2">
+            <Trash2 className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Wipe All</span>
+          </button>
+          <button onClick={() => setShowForm(true)} className="btn-electric flex items-center gap-2 text-sm px-4 py-2">
+            <Plus className="h-4 w-4" />{t('memory.add_memory')}
+          </button>
+        </div>
       </div>
 
       {/* Search and Filter */}
@@ -210,6 +233,50 @@ export default function Memory() {
               </button>
               <button
                 onClick={handleAdd} disabled={submitting} className="btn-electric px-4 py-2 text-sm font-medium">{submitting ? t('memory.saving') : t('common.save')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Wipe All Confirmation Modal */}
+      {confirmWipeAll && (
+        <div className="fixed inset-0 modal-backdrop flex items-center justify-center z-50">
+          <div className="surface-panel p-6 w-full max-w-md mx-4 animate-fade-in-scale">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-semibold" style={{ color: 'var(--pc-text-primary)' }}>
+                Wipe All Knowledge
+              </h3>
+              <button
+                onClick={() => setConfirmWipeAll(false)}
+                className="btn-icon"
+                disabled={wipingAll}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="text-sm mb-5" style={{ color: 'var(--pc-text-secondary)' }}>
+              This will remove all sessions, memory, and canvas state. This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmWipeAll(false)}
+                className="btn-secondary px-4 py-2 text-sm font-medium"
+                disabled={wipingAll}
+              >
+                {t('memory.cancel')}
+              </button>
+              <button
+                onClick={handleWipeAll}
+                className="btn-electric px-4 py-2 text-sm font-medium"
+                style={{
+                  borderColor: 'var(--color-status-error)',
+                  color: 'var(--color-status-error)',
+                  background: 'var(--color-status-error-alpha-08)'
+                }}
+                disabled={wipingAll}
+              >
+                {wipingAll ? 'Wiping...' : 'Wipe All'}
+              </button>
             </div>
           </div>
         </div>

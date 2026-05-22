@@ -887,6 +887,80 @@ pub async fn handle_api_cli_tools(
 
     Json(serde_json::json!({"cli_tools": tools})).into_response()
 }
+#[derive(serde::Deserialize)]
+pub struct NeuralyzeBody {
+    pub mode: Option<String>,
+}
+
+/// POST /api/maintenance/neuralyze — wipe all history or full state
+pub async fn handle_api_maintenance_neuralyze(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<NeuralyzeBody>>,
+) -> impl IntoResponse {
+    if let Err(e) = require_auth(&state, &headers) {
+        return e.into_response();
+    }
+
+    let mode = body
+        .and_then(|b| b.mode.clone())
+        .unwrap_or_else(|| "soft".to_string());
+
+    let is_hard = mode == "hard";
+
+    tracing::warn!(
+        "⚠️  Maintenance: Neuralyze requested (mode: {}) — wiping {} state",
+        mode,
+        if is_hard { "FULL" } else { "conversation" }
+    );
+
+    // 1. Wipe Sessions (Conversations) — Always done
+    let mut session_count = 0;
+    if let Some(backend) = &state.session_backend {
+        let sessions = backend.list_sessions();
+        for session in sessions {
+            // Remove chat history from session backend
+            if let Ok(count) = backend.clear_messages(&session) {
+                session_count += count;
+            }
+        }
+    }
+
+    // 2. Wipe Global Memory — Only on hard reset
+    let mut memory_count = 0;
+    if is_hard {
+        // Purge standard global categories
+        let global_categories = [
+            "core",
+            "daily",
+            "conversation", // This was missing and caused the issue
+            "procedural",
+            "episodic",
+            "autosave",
+            "working",
+            "scratchpad",
+        ];
+        for cat in global_categories {
+            if let Ok(count) = state.mem.purge_namespace(cat).await {
+                memory_count += count;
+            }
+        }
+    }
+
+    // 3. Clear Canvas — Always done
+    state.canvas_store.clear_all();
+
+    Json(serde_json::json!({
+        "status": "success",
+        "message": if is_hard {
+            format!("Hard Reset: {session_count} messages and {memory_count} memory entries wiped.")
+        } else {
+            format!("Soft Wipe: {session_count} messages wiped. Memory preserved.")
+        },
+        "clear_local_storage": true
+    }))
+    .into_response()
+}
 
 /// GET /api/channels — list configured channels with status
 pub async fn handle_api_channels(

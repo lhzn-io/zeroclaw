@@ -174,6 +174,16 @@ impl CanvasStore {
         let store = self.inner.read();
         store.keys().cloned().collect()
     }
+
+    /// Clear all canvases and remove all entries.
+    pub fn clear_all(&self) {
+        let canvas_ids = self.list();
+        for id in canvas_ids {
+            self.clear(&id);
+        }
+        let mut store = self.inner.write();
+        store.clear();
+    }
 }
 
 /// `CanvasTool` — agent-callable tool for the Live Canvas (A2UI) system.
